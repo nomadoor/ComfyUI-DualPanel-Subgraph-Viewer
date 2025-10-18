@@ -104,8 +104,9 @@ app.registerExtension({
 
                 body.${BODY_CLASS} .${HOST_CLASS} {
                     box-sizing: border-box;
-                    padding-right: var(--dual-panel-subgraph-width);
-                    transition: padding-right 140ms ease;
+                    width: calc(100% - var(--dual-panel-subgraph-width));
+                    max-width: calc(100% - var(--dual-panel-subgraph-width));
+                    transition: width 140ms ease, max-width 140ms ease;
                 }
             `;
             document.head.appendChild(style);
@@ -116,14 +117,24 @@ app.registerExtension({
         }
 
         function ensureMainHosts() {
-            if (state.mainHosts.length) {
+            const currentCanvas = getMainCanvasElement();
+            if (!currentCanvas) {
                 return;
             }
-            const mainHost = document.getElementById("graph-canvas");
-            if (mainHost) {
-                mainHost.classList.add(HOST_CLASS);
-                state.mainHosts.push(mainHost);
+            const host = currentCanvas.parentElement;
+            if (!host) {
+                return;
             }
+            if (
+                state.mainHosts.length === 1 &&
+                state.mainHosts[0] === host &&
+                host.classList.contains(HOST_CLASS)
+            ) {
+                return;
+            }
+            resetMainHosts();
+            host.classList.add(HOST_CLASS);
+            state.mainHosts = [host];
         }
 
         function resetMainHosts() {
