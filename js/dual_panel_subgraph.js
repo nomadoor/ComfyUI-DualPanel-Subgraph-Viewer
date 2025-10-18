@@ -116,30 +116,14 @@ app.registerExtension({
         }
 
         function ensureMainHosts() {
-            const currentCanvas = getMainCanvasElement();
-            const isHostValid = (el) => el && el.isConnected && el.classList.contains(HOST_CLASS);
             if (state.mainHosts.length) {
-                if (state.mainHosts.every(isHostValid)) {
-                    const canvasParent = currentCanvas?.parentElement;
-                    if (canvasParent && state.mainHosts.includes(canvasParent)) {
-                        return;
-                    }
-                }
-                resetMainHosts();
-            }
-            if (!currentCanvas) {
                 return;
             }
-            const hosts = [];
-            let current = currentCanvas.parentElement;
-            for (let depth = 0; current && current !== document.body && depth < 3; depth += 1) {
-                if (!current.classList.contains(HOST_CLASS)) {
-                    current.classList.add(HOST_CLASS);
-                    hosts.push(current);
-                }
-                current = current.parentElement;
+            const mainHost = document.getElementById("graph-canvas");
+            if (mainHost) {
+                mainHost.classList.add(HOST_CLASS);
+                state.mainHosts.push(mainHost);
             }
-            state.mainHosts = hosts;
         }
 
         function resetMainHosts() {
