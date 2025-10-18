@@ -30,6 +30,7 @@ app.registerExtension({
             style.textContent = `
                 :root {
                     --dual-panel-subgraph-width: min(50vw, 680px);
+                    --dual-panel-top-offset: 0px;
                 }
 
                 body.${BODY_CLASS} {
@@ -38,10 +39,10 @@ app.registerExtension({
 
                 .${PANEL_CLASS} {
                     position: fixed;
-                    top: 0;
+                    top: var(--dual-panel-top-offset, 0px);
                     right: 0;
                     width: var(--dual-panel-subgraph-width);
-                    height: 100vh;
+                    height: calc(100vh - var(--dual-panel-top-offset, 0px));
                     display: flex;
                     flex-direction: column;
                     background: var(--comfy-menu-bg, #1b1b1f);
@@ -91,6 +92,7 @@ app.registerExtension({
 
                 .dual-panel-subgraph__canvas {
                     flex: 1;
+                    height: calc(100vh - var(--dual-panel-top-offset, 0px));
                     position: relative;
                     overflow: hidden;
                     background: var(--comfy-menu-bg, #1b1b1f);
@@ -191,6 +193,7 @@ app.registerExtension({
 
             document.body.classList.remove(BODY_CLASS);
             document.documentElement.style.removeProperty("--dual-panel-subgraph-width");
+            document.documentElement.style.removeProperty("--dual-panel-top-offset");
 
             state.panel.remove();
             state.panel = null;
@@ -320,11 +323,29 @@ app.registerExtension({
             return { panel, canvasHost, canvas };
         }
 
-        function syncLayoutFromPanel(panel) {
+        function updatePanelOffset(panel, canvasHost) {
+            const topBar = document.querySelector(".comfy-menu");
+            const canvasContainer = document.getElementById("graph-canvas");
+            const topBarBottom = topBar ? topBar.getBoundingClientRect().bottom : 0;
+            const containerTop = canvasContainer ? canvasContainer.getBoundingClientRect().top : 0;
+            const offset = Math.max(topBarBottom, containerTop, 0);
+            const offsetPx = `${Math.round(offset)}px`;
+            document.documentElement.style.setProperty("--dual-panel-top-offset", offsetPx);
+            if (panel) {
+                panel.style.top = offsetPx;
+                panel.style.height = `calc(100vh - ${offsetPx})`;
+            }
+            if (canvasHost) {
+                canvasHost.style.height = `calc(100vh - ${offsetPx})`;
+            }
+        }
+
+        function syncLayoutFromPanel(panel, canvasHost) {
             const width = panel.getBoundingClientRect().width;
             if (width > 0) {
                 document.documentElement.style.setProperty("--dual-panel-subgraph-width", `${Math.round(width)}px`);
             }
+            updatePanelOffset(panel, canvasHost);
         }
 
         function openPanel(node) {
@@ -358,7 +379,7 @@ app.registerExtension({
             state.graphCanvas = graphCanvas;
 
             const panelResizeObserver = new ResizeObserver(() => {
-                syncLayoutFromPanel(panel);
+                syncLayoutFromPanel(panel, canvasHost);
                 handleResize(canvas, graphCanvas);
             });
             panelResizeObserver.observe(panel);
@@ -368,7 +389,7 @@ app.registerExtension({
             canvasResizeObserver.observe(canvasHost);
             state.disposers.push(() => canvasResizeObserver.disconnect());
 
-            syncLayoutFromPanel(panel);
+            syncLayoutFromPanel(panel, canvasHost);
             handleResize(canvas, graphCanvas);
 
             attachFocusHandlers(canvas, graphCanvas);
