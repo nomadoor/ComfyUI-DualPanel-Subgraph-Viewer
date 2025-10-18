@@ -1,0 +1,37 @@
+# ---- Python artifacts -------------------------------------------------
+__pycache__/
+*.py[cod]
+*.so
+.python-version
+.pytest_cache/
+
+# ---- Virtual environments ---------------------------------------------
+.venv/
+venv/
+env/
+
+# ---- JavaScript / TypeScript tooling ----------------------------------
+node_modules/
+pnpm-lock.yaml
+package-lock.json
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# ---- Build outputs ----------------------------------------------------
+dist/
+build/
+*.bundle.js
+
+# ---- Editor and OS metadata -------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ---- Serena agent cache ------------------------------------------------
+.serena/cache/
+
+# ---- Misc --------------------------------------------------------------
+*.log
+*.tmp
