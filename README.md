@@ -17,6 +17,7 @@ A frontend extension for ComfyUI that allows you to open and edit subgraphs in a
 
 ## Overview
 
+https://github.com/user-attachments/assets/ef51bdcf-4bef-4a71-bff0-f03aa01e661f
 - Click the icon in the upper right corner of a Subgraph node, or double-click the node, to open the subgraph editor in a right-hand panel.  
 - Drag the edge of the panel to change its width.  
 - Click the `Close` button in the upper right corner of the panel to close it.
