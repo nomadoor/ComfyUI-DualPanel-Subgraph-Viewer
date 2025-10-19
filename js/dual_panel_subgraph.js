@@ -162,8 +162,12 @@ app.registerExtension({
                 }
 
                 @media (min-width: 768px) {
-                    body.${BODY_CLASS} .minimap-main-container,
-                    body.${BODY_CLASS} .p-buttongroup.p-component.p-buttongroup-vertical,
+                    body.${BODY_CLASS} .minimap-main-container {
+                        right: 2.75rem !important;
+                    }
+                    body.${BODY_CLASS} .p-buttongroup.p-component.p-buttongroup-vertical {
+                        right: 1rem !important;
+                    }
                     body.${BODY_CLASS} .w-\\[250px\\].z-1300 {
                         right: 2.75rem !important;
                     }
@@ -234,6 +238,232 @@ app.registerExtension({
             return Boolean(target.closest("[data-dual-panel-ignore-shortcuts]"));
         }
 
+        function getSelectedNodes(canvas) {
+            const nodes = [];
+            if (!canvas) {
+                return nodes;
+            }
+            if (Array.isArray(canvas.selected_nodes_list)) {
+                canvas.selected_nodes_list.forEach((node) => {
+                    if (node && !nodes.includes(node)) {
+                        nodes.push(node);
+                    }
+                });
+            }
+            if (canvas.selected_nodes) {
+                Object.keys(canvas.selected_nodes).forEach((key) => {
+                    const node = canvas.selected_nodes[key];
+                    if (node && !nodes.includes(node)) {
+                        nodes.push(node);
+                    }
+                });
+            }
+            return nodes;
+        }
+
+        function getSelectedGroups(canvas) {
+            const groups = [];
+            if (!canvas) {
+                return groups;
+            }
+            if (Array.isArray(canvas.selected_group_list)) {
+                canvas.selected_group_list.forEach((group) => {
+                    if (group) {
+                        groups.push(group);
+                    }
+                });
+            } else if (canvas.selected_group) {
+                groups.push(canvas.selected_group);
+            }
+            return groups;
+        }
+
+        function subgraphHasSelection() {
+            const canvas = state.graphCanvas;
+            if (!canvas) {
+                return false;
+            }
+            if (canvas.selectedItems?.size) {
+                return true;
+            }
+            if (canvas.selected_link) {
+                return true;
+            }
+            if (getSelectedGroups(canvas).length > 0) {
+                return true;
+            }
+            return getSelectedNodes(canvas).length > 0;
+        }
+
+        function markCanvasDirty(canvas) {
+            if (!canvas) {
+                return;
+            }
+            if (typeof canvas.setDirty === "function") {
+                canvas.setDirty(true, true);
+            } else {
+                canvas.dirty_canvas = true;
+                canvas.dirty_bgcanvas = true;
+            }
+        }
+
+        function withSafeCanvasOperation(canvas, operation) {
+            if (!canvas || typeof operation !== "function") {
+                return false;
+            }
+            const originalCheckPanels = canvas.checkPanels;
+            if (typeof originalCheckPanels === "function") {
+                canvas.checkPanels = () => undefined;
+            }
+            try {
+                return operation() ?? true;
+            } catch (error) {
+                console.warn("[DualPanel] Canvas operation failed", error);
+                return false;
+            } finally {
+                if (typeof originalCheckPanels === "function") {
+                    canvas.checkPanels = originalCheckPanels;
+                }
+            }
+        }
+
+        function handleSubgraphDelete() {
+            const canvas = state.graphCanvas;
+            if (!canvas || !subgraphHasSelection()) {
+                return false;
+            }
+            return withSafeCanvasOperation(canvas, () => {
+                if (typeof canvas.deleteSelected !== "function") {
+                    return false;
+                }
+                const result = canvas.deleteSelected();
+                markCanvasDirty(canvas);
+                canvas.draw?.(true, true);
+                return result !== false;
+            });
+        }
+
+        function handleSubgraphPinToggle() {
+            const canvas = state.graphCanvas;
+            if (!canvas) {
+                return false;
+            }
+            const nodes = getSelectedNodes(canvas);
+            if (!nodes.length) {
+                return false;
+            }
+            let toggled = false;
+            nodes.forEach((node) => {
+                if (typeof node.pin === "function") {
+                    try {
+                        node.pin(!node.pinned);
+                        toggled = true;
+                    } catch (error) {
+                        console.warn("[DualPanel] Failed to toggle pin on node", error);
+                    }
+                }
+            });
+            if (toggled) {
+                markCanvasDirty(canvas);
+                canvas.draw?.(true, true);
+            }
+            return toggled;
+        }
+
+        function handleSubgraphCopy() {
+            const canvas = state.graphCanvas;
+            if (!canvas || !subgraphHasSelection()) {
+                return false;
+            }
+            return withSafeCanvasOperation(canvas, () => {
+                if (typeof canvas.copyToClipboard !== "function") {
+                    return false;
+                }
+                canvas.copyToClipboard();
+                return true;
+            });
+        }
+
+        function handleSubgraphCut() {
+            if (!handleSubgraphCopy()) {
+                return false;
+            }
+            return handleSubgraphDelete();
+        }
+
+        function handleSubgraphPaste(connectInputs) {
+            const canvas = state.graphCanvas;
+            if (!canvas || typeof canvas.pasteFromClipboard !== "function") {
+                return false;
+            }
+            return withSafeCanvasOperation(canvas, () => {
+                canvas.pasteFromClipboard({ connectInputs });
+                markCanvasDirty(canvas);
+                canvas.draw?.(true, true);
+                return true;
+            });
+        }
+
+        function registerShortcutHandlers() {
+            const handler = (event) => {
+                if (!state.panelHasFocus || !state.graphCanvas) {
+                    return;
+                }
+                if (shouldIgnoreKeyEventTarget(event.target)) {
+                    return;
+                }
+
+                const isMod = event.ctrlKey || event.metaKey;
+                const consume = () => {
+                    event.preventDefault();
+                    event.stopImmediatePropagation?.();
+                    event.stopPropagation();
+                };
+
+                if (isMod && !event.altKey) {
+                    switch (event.code) {
+                        case "KeyC":
+                            if (handleSubgraphCopy()) {
+                                consume();
+                            }
+                            return;
+                        case "KeyX":
+                            if (handleSubgraphCut()) {
+                                consume();
+                            }
+                            return;
+                        case "KeyV":
+                            if (handleSubgraphPaste(event.shiftKey)) {
+                                consume();
+                            }
+                            return;
+                        default:
+                            return;
+                    }
+                }
+
+                if (!isMod && !event.altKey) {
+                    switch (event.code) {
+                        case "Delete":
+                        case "Backspace":
+                            if (handleSubgraphDelete()) {
+                                consume();
+                            }
+                            return;
+                        case "KeyP":
+                            if (handleSubgraphPinToggle()) {
+                                consume();
+                            }
+                            return;
+                        default:
+                            return;
+                    }
+                }
+            };
+            window.addEventListener("keydown", handler, { capture: true });
+            state.disposers.push(() => window.removeEventListener("keydown", handler, { capture: true }));
+        }
+
         function clearCanvasSelection(canvas) {
             if (!canvas) {
                 return;
@@ -264,118 +494,6 @@ app.registerExtension({
             if (canvas.selected_link) {
                 canvas.selected_link = null;
             }
-        }
-
-        function getSelectedNodes(canvas) {
-            const nodes = [];
-            if (!canvas) {
-                return nodes;
-            }
-            if (canvas.selected_nodes) {
-                Object.keys(canvas.selected_nodes).forEach((key) => {
-                    const node = canvas.selected_nodes[key];
-                    if (node && !nodes.includes(node)) {
-                        nodes.push(node);
-                    }
-                });
-            }
-            if (Array.isArray(canvas.selected_nodes_list)) {
-                canvas.selected_nodes_list.forEach((node) => {
-                    if (node && !nodes.includes(node)) {
-                        nodes.push(node);
-                    }
-                });
-            }
-            return nodes;
-        }
-
-        function subgraphHasSelection() {
-            const canvas = state.graphCanvas;
-            if (!canvas) {
-                return false;
-            }
-            if (canvas.selectedItems?.size) {
-                return true;
-            }
-            if (canvas.selected_group || canvas.selected_link) {
-                return true;
-            }
-            return getSelectedNodes(canvas).length > 0;
-        }
-
-        function handleSubgraphDelete() {
-            const canvas = state.graphCanvas;
-            if (!canvas || !subgraphHasSelection()) {
-                return false;
-            }
-            if (typeof canvas.deleteSelected === "function") {
-                try {
-                    canvas.deleteSelected();
-                    canvas.draw?.(true, true);
-                    return true;
-                } catch (error) {
-                    console.warn("[DualPanel] Failed to delete subgraph selection", error);
-                }
-            }
-            return false;
-        }
-
-        function handleSubgraphPinToggle() {
-            const canvas = state.graphCanvas;
-            if (!canvas) {
-                return false;
-            }
-            const nodes = getSelectedNodes(canvas);
-            if (!nodes.length) {
-                return false;
-            }
-            let toggled = false;
-            nodes.forEach((node) => {
-                if (typeof node.pin === "function") {
-                    try {
-                        node.pin(!node.pinned);
-                        toggled = true;
-                    } catch (error) {
-                        console.warn("[DualPanel] Failed to toggle pin on node", error);
-                    }
-                }
-            });
-            if (toggled) {
-                canvas.draw?.(true, true);
-            }
-            return toggled;
-        }
-
-        function registerShortcutHandlers() {
-            const handler = (event) => {
-                if (!state.panelHasFocus || !state.graphCanvas) {
-                    return;
-                }
-                if (shouldIgnoreKeyEventTarget(event.target)) {
-                    return;
-                }
-                const code = event.code;
-                if (code === "Delete" || code === "Backspace") {
-                    if (handleSubgraphDelete()) {
-                        event.preventDefault();
-                        event.stopImmediatePropagation?.();
-                        event.stopPropagation();
-                    }
-                    return;
-                }
-                if (event.ctrlKey || event.metaKey || event.altKey) {
-                    return;
-                }
-                if (code === "KeyP") {
-                    if (handleSubgraphPinToggle()) {
-                        event.preventDefault();
-                        event.stopImmediatePropagation?.();
-                        event.stopPropagation();
-                    }
-                }
-            };
-            window.addEventListener("keydown", handler, { capture: true });
-            state.disposers.push(() => window.removeEventListener("keydown", handler, { capture: true }));
         }
 
         function setupPanelResizer(panel, canvasHost, canvas, graphCanvas, resizeHandle) {
@@ -502,7 +620,10 @@ app.registerExtension({
 
         function focusMainCanvas() {
             state.panelHasFocus = false;
-            const root = app.canvas ?? state.rootCanvas;
+            const root = state.rootCanvas ?? app.canvas;
+            if (root && app.canvas !== root) {
+                app.canvas = root;
+            }
             if (root && LiteGraph.active_canvas !== root) {
                 LiteGraph.active_canvas = root;
             }
@@ -544,10 +665,10 @@ app.registerExtension({
             state.panel.remove();
             state.panel = null;
             state.panelHasFocus = false;
-            state.rootCanvas = null;
 
             resetMainHosts();
             focusMainCanvas();
+            state.rootCanvas = null;
 
             console.debug(`[DualPanel] Panel closed (${reason})`);
         }
@@ -577,6 +698,9 @@ app.registerExtension({
                 if (state.rootCanvas && state.rootCanvas !== graphCanvas) {
                     clearCanvasSelection(state.rootCanvas);
                     state.rootCanvas.draw?.(true, true);
+                }
+                if (app.canvas !== graphCanvas) {
+                    app.canvas = graphCanvas;
                 }
                 if (LiteGraph.active_canvas !== graphCanvas) {
                     LiteGraph.active_canvas = graphCanvas;
@@ -728,6 +852,10 @@ app.registerExtension({
             ensureMainHosts();
             state.rootCanvas = app.canvas ?? null;
             state.panelHasFocus = false;
+            if (state.rootCanvas) {
+                clearCanvasSelection(state.rootCanvas);
+                state.rootCanvas.draw?.(true, true);
+            }
 
             const { panel, canvasHost, canvas, resizeHandle } = createPanelElements(node);
             document.body.appendChild(panel);
