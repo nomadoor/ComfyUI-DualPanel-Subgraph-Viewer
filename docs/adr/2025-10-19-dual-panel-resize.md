@@ -12,6 +12,7 @@
 - Added a temporary body class while resizing to give user feedback, suppress unwanted text selection, and disable layout transitions that caused visible gaps.
 - Throttled canvas resizes with `requestAnimationFrame` during pointer moves to keep drag interactions responsive while still redrawing at the next frame.
 - When the panel is open, detected the existing PrimeVue canvas toolbar (`.p-buttongroup.p-component.p-buttongroup-vertical`) and the minimap container (`.minimap-main-container`), pinning both to the viewport with fixed positioning so they stay anchored while the panel resizes the main canvas host.
+- Considered wiring `MutationObserver` + resize listeners so newly mounted minimap/zoom widgets stay pinned, but the naive prototype caused a feedback loop: pinning adjusts inline styles → observer fires → repin → layout thrashes. We postponed that approach until we can scope the observer to stable containers and temporarily pause it around our own mutations.
 
 ## Consequences
 - Users can resize the panel freely, and their preferred width survives reloads in the same browser profile.
@@ -19,3 +20,4 @@
 - Additional pointer-event logic must be maintained alongside future LiteGraph or Vue updates, but it remains isolated within the extension.
 - Frame-throttled resizing keeps the interaction smooth at the cost of slightly delayed redraws when dragging extremely quickly, which we accept as a trade-off.
 - The PrimeVue toolbar and minimap now float independently of the workflow canvas; if future ComfyUI updates rename these classes, we will need to refresh the tracked selectors.
+- Without scoped observers the pinned elements will still slide momentarily if the user toggles the minimap after the panel is open. Reintroducing observers requires the mitigations noted above to avoid another oscillation.
