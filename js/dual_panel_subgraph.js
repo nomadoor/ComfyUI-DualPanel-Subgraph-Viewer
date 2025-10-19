@@ -1,11 +1,11 @@
-import { app } from "../../scripts/app.js";
+﻿import { app } from "../../scripts/app.js";
 
-console.info("[DualPanel] ★★★ Module loaded ★★★");
+console.info("[DualPanel] Module loaded");
 
 app.registerExtension({
     name: "DualPanel.SubgraphViewer",
     async setup(app) {
-        console.info("[DualPanel] ★★★ setup() called ★★★");
+        console.info("[DualPanel] setup() called");
         const STYLE_ID = "dual-panel-subgraph-style";
         const BODY_CLASS = "dual-panel-subgraph-open";
         const BODY_RESIZING_CLASS = "dual-panel-subgraph-resizing";
@@ -14,11 +14,6 @@ app.registerExtension({
         const WIDTH_STORAGE_KEY = "dualPanel.subgraph.width.v1";
         const MIN_PANEL_WIDTH = 320;
         const MIN_MAIN_WIDTH = 360;
-        const FLOATING_UI_SELECTORS = [
-            ".p-buttongroup.p-component.p-buttongroup-vertical",
-            ".minimap-main-container"
-        ];
-
         installStyle();
 
         const state = {
@@ -27,8 +22,11 @@ app.registerExtension({
             graphCanvas: null,
             disposers: [],
             mainHosts: [],
-            floatingToolbars: [],
+            panelHasFocus: false,
+            rootCanvas: null,
         };
+
+        registerShortcutHandlers();
 
         function installStyle() {
             if (document.getElementById(STYLE_ID)) {
@@ -141,12 +139,34 @@ app.registerExtension({
                     transition: none !important;
                 }
 
-                .dual-panel-toolbar-fixed {
-                    pointer-events: auto;
+                body.${BODY_CLASS} .minimap-main-container,
+                body.${BODY_CLASS} .p-buttongroup.p-component.p-buttongroup-vertical,
+                body.${BODY_CLASS} .w-\\[250px\\].z-1300 {
+                    position: fixed !important;
+                    left: auto !important;
                 }
 
-                body.${BODY_CLASS} .dual-panel-toolbar-fixed {
-                    position: fixed !important;
+                body.${BODY_CLASS} .minimap-main-container {
+                    bottom: 66px !important;
+                    right: 0.5rem !important;
+                }
+
+                body.${BODY_CLASS} .p-buttongroup.p-component.p-buttongroup-vertical {
+                    bottom: 1rem !important;
+                    right: 0.5rem !important;
+                }
+
+                body.${BODY_CLASS} .w-\\[250px\\].z-1300 {
+                    bottom: 66px !important;
+                    right: 0.5rem !important;
+                }
+
+                @media (min-width: 768px) {
+                    body.${BODY_CLASS} .minimap-main-container,
+                    body.${BODY_CLASS} .p-buttongroup.p-component.p-buttongroup-vertical,
+                    body.${BODY_CLASS} .w-\\[250px\\].z-1300 {
+                        right: 2.75rem !important;
+                    }
                 }
             `;
             document.head.appendChild(style);
@@ -200,87 +220,162 @@ app.registerExtension({
             }
         }
 
-        function restoreFloatingToolbars() {
-            if (!state.floatingToolbars.length) {
-                return;
+        function shouldIgnoreKeyEventTarget(target) {
+            if (!(target instanceof Element)) {
+                return false;
             }
-            const entries = state.floatingToolbars.splice(0, state.floatingToolbars.length);
-            entries.forEach(({ element, previousInline }) => {
-                if (!element) {
-                    return;
-                }
-                element.classList.remove("dual-panel-toolbar-fixed");
-                const { position, right, bottom, left, top, zIndex } = previousInline;
-                element.style.position = position;
-                element.style.right = right;
-                element.style.bottom = bottom;
-                element.style.left = left;
-                element.style.top = top;
-                element.style.zIndex = zIndex;
-            });
+            const tagName = target.tagName?.toLowerCase();
+            if (tagName === "input" || tagName === "textarea") {
+                return true;
+            }
+            if (target.hasAttribute("contenteditable")) {
+                return true;
+            }
+            return Boolean(target.closest("[data-dual-panel-ignore-shortcuts]"));
         }
 
-        function pinFloatingToolbars() {
-            restoreFloatingToolbars();
-            const candidates = [];
-            const seen = new Set();
-            FLOATING_UI_SELECTORS.forEach((selector) => {
-                const elements = document.querySelectorAll(selector);
-                elements.forEach((element) => {
-                    if (!element || seen.has(element)) {
-                        return;
-                    }
-                    seen.add(element);
-                    candidates.push(element);
-                });
-            });
-            const pinned = [];
-            candidates.forEach((element) => {
-                if (!element?.isConnected) {
-                    return;
-                }
-                if (state.panel && state.panel.contains(element)) {
-                    return;
-                }
-                const computed = window.getComputedStyle(element);
-                if (!computed) {
-                    return;
-                }
-                if (computed.position !== "absolute" && computed.position !== "fixed") {
-                    return;
-                }
-                const verticalAnchor = computed.bottom !== "auto" ? { prop: "bottom", value: computed.bottom } :
-                    (computed.top !== "auto" ? { prop: "top", value: computed.top } : null);
-                const horizontalAnchor = computed.right !== "auto" ? { prop: "right", value: computed.right } :
-                    (computed.left !== "auto" ? { prop: "left", value: computed.left } : null);
-                if (!verticalAnchor || !horizontalAnchor) {
-                    return;
-                }
-                const previousInline = {
-                    position: element.style.position,
-                    right: element.style.right,
-                    bottom: element.style.bottom,
-                    left: element.style.left,
-                    top: element.style.top,
-                    zIndex: element.style.zIndex,
-                };
-                element.classList.add("dual-panel-toolbar-fixed");
-                element.style.position = "fixed";
-                element.style[verticalAnchor.prop] = verticalAnchor.value;
-                element.style[verticalAnchor.prop === "bottom" ? "top" : "bottom"] = "";
-                element.style[horizontalAnchor.prop] = horizontalAnchor.value;
-                element.style[horizontalAnchor.prop === "right" ? "left" : "right"] = "";
-                if (computed.zIndex === "auto") {
-                    element.style.zIndex = "70";
-                } else {
-                    element.style.zIndex = computed.zIndex;
-                }
-                pinned.push({ element, previousInline });
-            });
-            if (pinned.length) {
-                state.floatingToolbars = pinned;
-                state.disposers.push(restoreFloatingToolbars);
+        function clearCanvasSelection(canvas) {
+            if (!canvas) {
+                return;
             }
+            if (typeof canvas.deselectAll === "function") {
+                try {
+                    canvas.deselectAll();
+                } catch (error) {
+                    console.warn("[DualPanel] Failed to deselect canvas items", error);
+                }
+            }
+            if (canvas.selectedItems?.clear) {
+                canvas.selectedItems.clear();
+            }
+            if (Array.isArray(canvas.selected_nodes_list)) {
+                canvas.selected_nodes_list.length = 0;
+            }
+            if (canvas.selected_nodes) {
+                Object.keys(canvas.selected_nodes).forEach((key) => {
+                    delete canvas.selected_nodes[key];
+                });
+            }
+            canvas.selected_node = null;
+            if (Array.isArray(canvas.selected_group_list)) {
+                canvas.selected_group_list.length = 0;
+            }
+            canvas.selected_group = null;
+            if (canvas.selected_link) {
+                canvas.selected_link = null;
+            }
+        }
+
+        function getSelectedNodes(canvas) {
+            const nodes = [];
+            if (!canvas) {
+                return nodes;
+            }
+            if (canvas.selected_nodes) {
+                Object.keys(canvas.selected_nodes).forEach((key) => {
+                    const node = canvas.selected_nodes[key];
+                    if (node && !nodes.includes(node)) {
+                        nodes.push(node);
+                    }
+                });
+            }
+            if (Array.isArray(canvas.selected_nodes_list)) {
+                canvas.selected_nodes_list.forEach((node) => {
+                    if (node && !nodes.includes(node)) {
+                        nodes.push(node);
+                    }
+                });
+            }
+            return nodes;
+        }
+
+        function subgraphHasSelection() {
+            const canvas = state.graphCanvas;
+            if (!canvas) {
+                return false;
+            }
+            if (canvas.selectedItems?.size) {
+                return true;
+            }
+            if (canvas.selected_group || canvas.selected_link) {
+                return true;
+            }
+            return getSelectedNodes(canvas).length > 0;
+        }
+
+        function handleSubgraphDelete() {
+            const canvas = state.graphCanvas;
+            if (!canvas || !subgraphHasSelection()) {
+                return false;
+            }
+            if (typeof canvas.deleteSelected === "function") {
+                try {
+                    canvas.deleteSelected();
+                    canvas.draw?.(true, true);
+                    return true;
+                } catch (error) {
+                    console.warn("[DualPanel] Failed to delete subgraph selection", error);
+                }
+            }
+            return false;
+        }
+
+        function handleSubgraphPinToggle() {
+            const canvas = state.graphCanvas;
+            if (!canvas) {
+                return false;
+            }
+            const nodes = getSelectedNodes(canvas);
+            if (!nodes.length) {
+                return false;
+            }
+            let toggled = false;
+            nodes.forEach((node) => {
+                if (typeof node.pin === "function") {
+                    try {
+                        node.pin(!node.pinned);
+                        toggled = true;
+                    } catch (error) {
+                        console.warn("[DualPanel] Failed to toggle pin on node", error);
+                    }
+                }
+            });
+            if (toggled) {
+                canvas.draw?.(true, true);
+            }
+            return toggled;
+        }
+
+        function registerShortcutHandlers() {
+            const handler = (event) => {
+                if (!state.panelHasFocus || !state.graphCanvas) {
+                    return;
+                }
+                if (shouldIgnoreKeyEventTarget(event.target)) {
+                    return;
+                }
+                const code = event.code;
+                if (code === "Delete" || code === "Backspace") {
+                    if (handleSubgraphDelete()) {
+                        event.preventDefault();
+                        event.stopImmediatePropagation?.();
+                        event.stopPropagation();
+                    }
+                    return;
+                }
+                if (event.ctrlKey || event.metaKey || event.altKey) {
+                    return;
+                }
+                if (code === "KeyP") {
+                    if (handleSubgraphPinToggle()) {
+                        event.preventDefault();
+                        event.stopImmediatePropagation?.();
+                        event.stopPropagation();
+                    }
+                }
+            };
+            window.addEventListener("keydown", handler, { capture: true });
+            state.disposers.push(() => window.removeEventListener("keydown", handler, { capture: true }));
         }
 
         function setupPanelResizer(panel, canvasHost, canvas, graphCanvas, resizeHandle) {
@@ -406,8 +501,10 @@ app.registerExtension({
         }
 
         function focusMainCanvas() {
-            if (app.canvas && LiteGraph.active_canvas !== app.canvas) {
-                LiteGraph.active_canvas = app.canvas;
+            state.panelHasFocus = false;
+            const root = app.canvas ?? state.rootCanvas;
+            if (root && LiteGraph.active_canvas !== root) {
+                LiteGraph.active_canvas = root;
             }
         }
 
@@ -417,7 +514,6 @@ app.registerExtension({
             }
 
             disposeListeners();
-            restoreFloatingToolbars();
             document.body.classList.remove(BODY_RESIZING_CLASS);
 
             if (state.graphCanvas?.graph) {
@@ -447,6 +543,8 @@ app.registerExtension({
 
             state.panel.remove();
             state.panel = null;
+            state.panelHasFocus = false;
+            state.rootCanvas = null;
 
             resetMainHosts();
             focusMainCanvas();
@@ -472,11 +570,22 @@ app.registerExtension({
                 return;
             }
             const focusSubgraph = () => {
+                state.panelHasFocus = true;
+                if (!state.rootCanvas) {
+                    state.rootCanvas = app.canvas ?? null;
+                }
+                if (state.rootCanvas && state.rootCanvas !== graphCanvas) {
+                    clearCanvasSelection(state.rootCanvas);
+                    state.rootCanvas.draw?.(true, true);
+                }
                 if (LiteGraph.active_canvas !== graphCanvas) {
                     LiteGraph.active_canvas = graphCanvas;
                 }
             };
-            const focusRoot = () => focusMainCanvas();
+            const focusRoot = () => {
+                state.panelHasFocus = false;
+                focusMainCanvas();
+            };
 
             canvasElement.addEventListener("mouseenter", focusSubgraph);
             canvasElement.addEventListener("mousedown", focusSubgraph);
@@ -493,7 +602,13 @@ app.registerExtension({
                 canvasElement.removeEventListener("mouseenter", focusSubgraph);
                 canvasElement.removeEventListener("mousedown", focusSubgraph);
                 canvasElement.removeEventListener("touchstart", focusSubgraph, touchOptions);
+                canvasElement.removeEventListener("mouseleave", handleMouseLeave);
             });
+
+            function handleMouseLeave() {
+                state.panelHasFocus = false;
+            }
+            canvasElement.addEventListener("mouseleave", handleMouseLeave);
         }
 
         function registerEscapeListener() {
@@ -611,6 +726,8 @@ app.registerExtension({
             }
 
             ensureMainHosts();
+            state.rootCanvas = app.canvas ?? null;
+            state.panelHasFocus = false;
 
             const { panel, canvasHost, canvas, resizeHandle } = createPanelElements(node);
             document.body.appendChild(panel);
@@ -671,7 +788,6 @@ app.registerExtension({
             state.graphCanvas = graphCanvas;
 
             setupPanelResizer(panel, canvasHost, canvas, graphCanvas, resizeHandle);
-            pinFloatingToolbars();
 
             const panelResizeObserver = new ResizeObserver(() => {
                 syncLayoutFromPanel(panel, canvasHost);
@@ -769,7 +885,7 @@ app.registerExtension({
 
         await patchOpenSubgraph();
 
-        console.info("[DualPanel] ★★★ Patch complete ★★★");
+        console.info("[DualPanel] Patch complete");
         console.info("[DualPanel] DualPanel Subgraph Viewer extension ready");
     },
 });
