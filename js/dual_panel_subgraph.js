@@ -8,8 +8,16 @@ app.registerExtension({
         console.info("[DualPanel] ★★★ setup() called ★★★");
         const STYLE_ID = "dual-panel-subgraph-style";
         const BODY_CLASS = "dual-panel-subgraph-open";
+        const BODY_RESIZING_CLASS = "dual-panel-subgraph-resizing";
         const HOST_CLASS = "dual-panel-main-host";
         const PANEL_CLASS = "dual-panel-subgraph";
+        const WIDTH_STORAGE_KEY = "dualPanel.subgraph.width.v1";
+        const MIN_PANEL_WIDTH = 320;
+        const MIN_MAIN_WIDTH = 360;
+        const FLOATING_UI_SELECTORS = [
+            ".p-buttongroup.p-component.p-buttongroup-vertical",
+            ".minimap-main-container"
+        ];
 
         installStyle();
 
@@ -19,6 +27,7 @@ app.registerExtension({
             graphCanvas: null,
             disposers: [],
             mainHosts: [],
+            floatingToolbars: [],
         };
 
         function installStyle() {
@@ -37,6 +46,11 @@ app.registerExtension({
                     overflow: hidden;
                 }
 
+                body.${BODY_RESIZING_CLASS} {
+                    cursor: ew-resize;
+                    user-select: none;
+                }
+
                 .${PANEL_CLASS} {
                     position: fixed;
                     top: var(--dual-panel-top-offset, 0px);
@@ -50,6 +64,7 @@ app.registerExtension({
                     box-shadow: -24px 0 64px -48px rgba(0, 0, 0, 0.8);
                     z-index: 64;
                     transform: translateZ(0);
+                    will-change: width;
                 }
 
                 .dual-panel-subgraph__header {
@@ -85,6 +100,16 @@ app.registerExtension({
                     transition: background 120ms ease, border-color 120ms ease;
                 }
 
+                .dual-panel-subgraph__resize-handle {
+                    position: absolute;
+                    top: 0;
+                    left: -8px;
+                    width: 16px;
+                    height: 100%;
+                    cursor: ew-resize;
+                    z-index: 65;
+                }
+
                 .dual-panel-subgraph__close:hover {
                     background: rgba(255, 255, 255, 0.18);
                     border-color: rgba(255, 255, 255, 0.32);
@@ -110,8 +135,231 @@ app.registerExtension({
                     max-width: calc(100% - var(--dual-panel-subgraph-width));
                     transition: width 140ms ease, max-width 140ms ease;
                 }
+
+                body.${BODY_RESIZING_CLASS} .${PANEL_CLASS},
+                body.${BODY_RESIZING_CLASS} .${HOST_CLASS} {
+                    transition: none !important;
+                }
+
+                .dual-panel-toolbar-fixed {
+                    pointer-events: auto;
+                }
+
+                body.${BODY_CLASS} .dual-panel-toolbar-fixed {
+                    position: fixed !important;
+                }
             `;
             document.head.appendChild(style);
+        }
+
+        function clampPanelWidth(width) {
+            const viewportWidth = Math.max(window.innerWidth || document.documentElement.clientWidth || 0, MIN_PANEL_WIDTH);
+            const maxWidth = Math.max(MIN_PANEL_WIDTH, viewportWidth - MIN_MAIN_WIDTH);
+            const safeWidth = Math.min(Math.max(width, MIN_PANEL_WIDTH), Math.max(MIN_PANEL_WIDTH, maxWidth));
+            return Math.round(safeWidth);
+        }
+
+        function loadStoredPanelWidth() {
+            try {
+                const raw = window.localStorage?.getItem(WIDTH_STORAGE_KEY);
+                if (!raw) {
+                    return null;
+                }
+                const parsed = Number.parseInt(raw, 10);
+                if (Number.isFinite(parsed)) {
+                    return clampPanelWidth(parsed);
+                }
+            } catch (error) {
+                console.warn("[DualPanel] Failed to load stored panel width", error);
+            }
+            return null;
+        }
+
+        function persistPanelWidth(width) {
+            try {
+                window.localStorage?.setItem(WIDTH_STORAGE_KEY, String(clampPanelWidth(width)));
+            } catch (error) {
+                console.warn("[DualPanel] Failed to persist panel width", error);
+            }
+        }
+
+        function setPanelWidth(width, { panel, canvasHost, canvas, graphCanvas, persist = false } = {}) {
+            if (!panel) {
+                return;
+            }
+            const rounded = clampPanelWidth(width);
+            const widthPx = `${rounded}px`;
+            panel.style.width = widthPx;
+            document.documentElement.style.setProperty("--dual-panel-subgraph-width", widthPx);
+            updatePanelOffset(panel, canvasHost);
+            if (canvas && graphCanvas) {
+                handleResize(canvas, graphCanvas);
+            }
+            if (persist) {
+                persistPanelWidth(rounded);
+            }
+        }
+
+        function restoreFloatingToolbars() {
+            if (!state.floatingToolbars.length) {
+                return;
+            }
+            const entries = state.floatingToolbars.splice(0, state.floatingToolbars.length);
+            entries.forEach(({ element, previousInline }) => {
+                if (!element) {
+                    return;
+                }
+                element.classList.remove("dual-panel-toolbar-fixed");
+                const { position, right, bottom, left, top, zIndex } = previousInline;
+                element.style.position = position;
+                element.style.right = right;
+                element.style.bottom = bottom;
+                element.style.left = left;
+                element.style.top = top;
+                element.style.zIndex = zIndex;
+            });
+        }
+
+        function pinFloatingToolbars() {
+            restoreFloatingToolbars();
+            const candidates = [];
+            const seen = new Set();
+            FLOATING_UI_SELECTORS.forEach((selector) => {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach((element) => {
+                    if (!element || seen.has(element)) {
+                        return;
+                    }
+                    seen.add(element);
+                    candidates.push(element);
+                });
+            });
+            const pinned = [];
+            candidates.forEach((element) => {
+                if (!element?.isConnected) {
+                    return;
+                }
+                if (state.panel && state.panel.contains(element)) {
+                    return;
+                }
+                const computed = window.getComputedStyle(element);
+                if (!computed) {
+                    return;
+                }
+                if (computed.position !== "absolute" && computed.position !== "fixed") {
+                    return;
+                }
+                const verticalAnchor = computed.bottom !== "auto" ? { prop: "bottom", value: computed.bottom } :
+                    (computed.top !== "auto" ? { prop: "top", value: computed.top } : null);
+                const horizontalAnchor = computed.right !== "auto" ? { prop: "right", value: computed.right } :
+                    (computed.left !== "auto" ? { prop: "left", value: computed.left } : null);
+                if (!verticalAnchor || !horizontalAnchor) {
+                    return;
+                }
+                const previousInline = {
+                    position: element.style.position,
+                    right: element.style.right,
+                    bottom: element.style.bottom,
+                    left: element.style.left,
+                    top: element.style.top,
+                    zIndex: element.style.zIndex,
+                };
+                element.classList.add("dual-panel-toolbar-fixed");
+                element.style.position = "fixed";
+                element.style[verticalAnchor.prop] = verticalAnchor.value;
+                element.style[verticalAnchor.prop === "bottom" ? "top" : "bottom"] = "";
+                element.style[horizontalAnchor.prop] = horizontalAnchor.value;
+                element.style[horizontalAnchor.prop === "right" ? "left" : "right"] = "";
+                if (computed.zIndex === "auto") {
+                    element.style.zIndex = "70";
+                } else {
+                    element.style.zIndex = computed.zIndex;
+                }
+                pinned.push({ element, previousInline });
+            });
+            if (pinned.length) {
+                state.floatingToolbars = pinned;
+                state.disposers.push(restoreFloatingToolbars);
+            }
+        }
+
+        function setupPanelResizer(panel, canvasHost, canvas, graphCanvas, resizeHandle) {
+            if (!panel || !resizeHandle) {
+                return;
+            }
+
+            let resizeRafId = null;
+
+            const scheduleCanvasResize = () => {
+                if (!canvas || !graphCanvas) {
+                    return;
+                }
+                if (resizeRafId !== null) {
+                    return;
+                }
+                resizeRafId = window.requestAnimationFrame(() => {
+                    resizeRafId = null;
+                    handleResize(canvas, graphCanvas);
+                });
+            };
+
+            const pointerDown = (event) => {
+                const isPrimaryPointer = event.button === 0 || event.pointerType === "touch" || event.pointerType === "pen";
+                if (!isPrimaryPointer) {
+                    return;
+                }
+                event.preventDefault();
+
+                const updateFromClientX = (clientX) => {
+                    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || panel.getBoundingClientRect().right;
+                    const desiredWidth = viewportWidth - clientX;
+                    setPanelWidth(desiredWidth, { panel, canvasHost });
+                    scheduleCanvasResize();
+                };
+
+                const releasePointer = (releaseEvent) => {
+                    if (releaseEvent.pointerId !== event.pointerId) {
+                        return;
+                    }
+                    resizeHandle.releasePointerCapture?.(event.pointerId);
+                    resizeHandle.removeEventListener("pointermove", handlePointerMove);
+                    resizeHandle.removeEventListener("pointerup", releasePointer);
+                    resizeHandle.removeEventListener("pointercancel", releasePointer);
+                    document.body.classList.remove(BODY_RESIZING_CLASS);
+                    if (resizeRafId !== null) {
+                        window.cancelAnimationFrame(resizeRafId);
+                        resizeRafId = null;
+                    }
+                    const finalWidth = panel.getBoundingClientRect().width;
+                    setPanelWidth(finalWidth, { panel, canvasHost, canvas, graphCanvas, persist: true });
+                };
+
+                const handlePointerMove = (moveEvent) => {
+                    if (moveEvent.pointerId !== event.pointerId) {
+                        return;
+                    }
+                    moveEvent.preventDefault();
+                    updateFromClientX(moveEvent.clientX);
+                };
+
+                resizeHandle.setPointerCapture?.(event.pointerId);
+                document.body.classList.add(BODY_RESIZING_CLASS);
+                updateFromClientX(event.clientX);
+
+                resizeHandle.addEventListener("pointermove", handlePointerMove);
+                resizeHandle.addEventListener("pointerup", releasePointer);
+                resizeHandle.addEventListener("pointercancel", releasePointer);
+            };
+
+            resizeHandle.addEventListener("pointerdown", pointerDown);
+            state.disposers.push(() => {
+                document.body.classList.remove(BODY_RESIZING_CLASS);
+                if (resizeRafId !== null) {
+                    window.cancelAnimationFrame(resizeRafId);
+                    resizeRafId = null;
+                }
+                resizeHandle.removeEventListener("pointerdown", pointerDown);
+            });
         }
 
         function getMainCanvasElement() {
@@ -169,6 +417,8 @@ app.registerExtension({
             }
 
             disposeListeners();
+            restoreFloatingToolbars();
+            document.body.classList.remove(BODY_RESIZING_CLASS);
 
             if (state.graphCanvas?.graph) {
                 try {
@@ -317,10 +567,14 @@ app.registerExtension({
             canvas.className = "litegraph";
             canvasHost.appendChild(canvas);
 
+            const resizeHandle = document.createElement("div");
+            resizeHandle.className = "dual-panel-subgraph__resize-handle";
+
             panel.appendChild(header);
+            panel.appendChild(resizeHandle);
             panel.appendChild(canvasHost);
 
-            return { panel, canvasHost, canvas };
+            return { panel, canvasHost, canvas, resizeHandle };
         }
 
         function updatePanelOffset(panel, canvasHost) {
@@ -358,9 +612,27 @@ app.registerExtension({
 
             ensureMainHosts();
 
-            const { panel, canvasHost, canvas } = createPanelElements(node);
+            const { panel, canvasHost, canvas, resizeHandle } = createPanelElements(node);
             document.body.appendChild(panel);
             document.body.classList.add(BODY_CLASS);
+
+            const storedWidth = loadStoredPanelWidth();
+            if (storedWidth) {
+                setPanelWidth(storedWidth, { panel, canvasHost, canvas });
+            }
+
+            const stopEventPropagation = (event) => {
+                event.stopPropagation();
+            };
+            const subgraphCanvasEvents = ["pointerdown", "pointerup", "dblclick", "contextmenu"];
+            subgraphCanvasEvents.forEach((evtName) => {
+                canvas.addEventListener(evtName, stopEventPropagation);
+            });
+            state.disposers.push(() => {
+                subgraphCanvasEvents.forEach((evtName) => {
+                    canvas.removeEventListener(evtName, stopEventPropagation);
+                });
+            });
 
             const subgraph = node.subgraph;
             const graphCanvas = new LiteGraph.LGraphCanvas(canvas, null, {
@@ -374,9 +646,32 @@ app.registerExtension({
             graphCanvas.subgraph = subgraph;
             graphCanvas.startRendering?.();
 
+            const suppressedEmitEventSubtypes = new Set([
+                "empty-double-click",
+                "group-double-click",
+                "node-double-click"
+            ]);
+            const originalEmitEvent = graphCanvas.emitEvent;
+            graphCanvas.emitEvent = function (event, ...args) {
+                const subtype = event?.subType;
+                if (subtype && suppressedEmitEventSubtypes.has(subtype)) {
+                    return undefined;
+                }
+                if (typeof originalEmitEvent === "function") {
+                    return originalEmitEvent.call(this, event, ...args);
+                }
+                return undefined;
+            };
+            state.disposers.push(() => {
+                graphCanvas.emitEvent = originalEmitEvent;
+            });
+
             state.panel = panel;
             state.node = node;
             state.graphCanvas = graphCanvas;
+
+            setupPanelResizer(panel, canvasHost, canvas, graphCanvas, resizeHandle);
+            pinFloatingToolbars();
 
             const panelResizeObserver = new ResizeObserver(() => {
                 syncLayoutFromPanel(panel, canvasHost);

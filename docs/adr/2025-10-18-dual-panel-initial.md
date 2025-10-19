@@ -25,3 +25,11 @@
 - **Event listener cleanup:** Touch focus handlers were previously registered with `{ passive: true }` but removed without matching options. Matching add/remove signatures prevents leaked listeners on Safari/iOS.
 - **Bug fix regressions:** A regressions introduced while refreshing the host calculation referenced an undefined `canvasElement`, preventing the panel from opening. Restored correct usage of `currentCanvas.parentElement`, eliminating the runtime `ReferenceError`.
 - **Observed backend 404s:** The Vue frontend logs `api/userdata/...` 404s when optional user assets (templates, CSS) are absent. These are expected in a clean setup and unrelated to the extension; documented here to avoid misattributing them to the panel logic.
+
+- **Open issue (2025-10-18): Subgraph panel cannot host DOM-based widgets (e.g. CLIP Text Encode multiline prompt).** 
+  ComfyUI renders multiline prompts as DOM widgets (`addDOMWidget`) via a separate Vue+Pinia layer tied to the main canvas. Our dual-panel canvas does not participate in that lifecycle, so the widgets are not promoted/visible and user input is impossible without a deeper frontend change. Until the upstream DOM widget layer supports multiple canvases, we treat multiline prompts as read-only inside the panel.
+- **Open issue (2025-10-18): Node toolbars are missing inside the subgraph panel.**
+  The Vue toolbar overlay relies on `useCanvasStore()` (Pinia) watching the active canvas; our secondary `LGraphCanvas` is not registered with that store, so the overlay never renders. Enabling it would require upstream support for multiple canvases inside the front-end store.
+
+- **Open issue (2025-10-18): Node toolbars are missing inside the subgraph panel.**
+  The Vue toolbar overlay relies on `useCanvasStore()` (Pinia) watching the active canvas; our secondary LGraphCanvas is not registered with that store, so the overlay never renders. Enabling it would require upstream support for multiple canvases inside the front-end store.
